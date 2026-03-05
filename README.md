@@ -30,9 +30,17 @@ Follow these steps to run the barebones Chainlit application.
     ```bash
     poetry install
     ```
-4. Verify your `PYTHONPATH` environment variable includes `./src`:
+4. Verify your `PYTHONPATH` environment variable includes `./src`.
+
+    Linux / macOS:
     ```bash
     echo $PYTHONPATH
+    # ./src
+    ```
+
+    Windows (PowerShell):
+    ```powershell
+    echo $env:PYTHONPATH
     # ./src
     ```
 5. List embeddings available for download:
@@ -82,7 +90,7 @@ Follow these steps to run the complete application in Docker.
     ```bash
     docker build -t reactome-chatbot .
     ```
-6. Start the Chainlit application and PostgrSQL database in Docker containers:
+6. Start the Chainlit application and PostgreSQL database in Docker containers:
     ```bash
     docker-compose up
 
