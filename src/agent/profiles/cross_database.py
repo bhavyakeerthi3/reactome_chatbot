@@ -1,5 +1,6 @@
 from typing import Any, Literal
 
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -15,19 +16,29 @@ from agent.tasks.cross_database.rewrite_uniprot_with_reactome import \
     create_uniprot_rewriter_w_reactome
 from agent.tasks.cross_database.summarize_reactome_uniprot import \
     create_reactome_uniprot_summarizer
+from agent.tasks.hallucination_grader import (HallucinationGrade,
+                                              create_hallucination_grader,
+                                              format_documents)
 from retrievers.reactome.rag import create_reactome_rag
 from retrievers.uniprot.rag import create_uniprot_rag
+from tools.external_search.state import WebSearchResult
+from tools.external_search.tavily_wrapper import TavilyWrapper
 
 
 class CrossDatabaseState(BaseState):
     reactome_query: str  # LLM-generated query for Reactome
     reactome_answer: str  # LLM-generated answer from Reactome
+    reactome_context: list[Document]  # Retrieved docs used to generate reactome_answer
     reactome_completeness: str  # LLM-assessed completeness of the Reactome answer
+    reactome_hallucination: str  # "Yes" = grounded, "No" = hallucinated
 
     uniprot_query: str  # LLM-generated query for UniProt
     uniprot_answer: str  # LLM-generated answer from UniProt
+    uniprot_context: list[Document]  # Retrieved docs used to generate uniprot_answer
     uniprot_completeness: str  # LLM-assessed completeness of the UniProt answer
+    uniprot_hallucination: str  # "Yes" = grounded, "No" = hallucinated
 
+    web_search_results: list[WebSearchResult]  # Tavily results when both DBs are incomplete
 
 class CrossDatabaseGraphBuilder(BaseGraphBuilder):
     def __init__(
@@ -42,6 +53,7 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
         self.uniprot_rag: Runnable = create_uniprot_rag(llm, embedding)
 
         self.completeness_checker = create_completeness_grader(llm)
+        self.hallucination_grader = create_hallucination_grader(llm)
         self.write_reactome_query = create_reactome_rewriter_w_uniprot(llm)
         self.write_uniprot_query = create_uniprot_rewriter_w_reactome(llm)
         self.summarize_final_answer = create_reactome_uniprot_summarizer(
@@ -55,13 +67,16 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
         state_graph.add_node("preprocess_question", self.preprocess)
         state_graph.add_node("conduct_research", self.conduct_research)
         state_graph.add_node("generate_reactome_answer", self.generate_reactome_answer)
+        state_graph.add_node("check_reactome_hallucination", self.check_reactome_hallucination)
         state_graph.add_node("rewrite_reactome_query", self.rewrite_reactome_query)
         state_graph.add_node("rewrite_reactome_answer", self.rewrite_reactome_answer)
         state_graph.add_node("generate_uniprot_answer", self.generate_uniprot_answer)
+        state_graph.add_node("check_uniprot_hallucination", self.check_uniprot_hallucination)
         state_graph.add_node("rewrite_uniprot_query", self.rewrite_uniprot_query)
         state_graph.add_node("rewrite_uniprot_answer", self.rewrite_uniprot_answer)
         state_graph.add_node("assess_completeness", self.assess_completeness)
         state_graph.add_node("decide_next_steps", self.decide_next_steps)
+        state_graph.add_node("perform_web_search", self.perform_web_search)
         state_graph.add_node("generate_final_response", self.generate_final_response)
         state_graph.add_node("postprocess", self.postprocess)
         # Set up edges
@@ -74,14 +89,18 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
         )
         state_graph.add_edge("conduct_research", "generate_reactome_answer")
         state_graph.add_edge("conduct_research", "generate_uniprot_answer")
-        state_graph.add_edge("generate_reactome_answer", "assess_completeness")
-        state_graph.add_edge("generate_uniprot_answer", "assess_completeness")
+        # Hallucination checks run immediately after each DB answer is generated
+        state_graph.add_edge("generate_reactome_answer", "check_reactome_hallucination")
+        state_graph.add_edge("generate_uniprot_answer", "check_uniprot_hallucination")
+        # Both hallucination checks feed into completeness assessment
+        state_graph.add_edge("check_reactome_hallucination", "assess_completeness")
+        state_graph.add_edge("check_uniprot_hallucination", "assess_completeness")
         state_graph.add_conditional_edges(
             "assess_completeness",
             self.decide_next_steps,
             {
                 "generate_final_response": "generate_final_response",
-                "perform_web_search": "generate_final_response",
+                "perform_web_search": "perform_web_search",
                 "rewrite_reactome_query": "rewrite_reactome_query",
                 "rewrite_uniprot_query": "rewrite_uniprot_query",
             },
@@ -90,6 +109,7 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
         state_graph.add_edge("rewrite_uniprot_query", "rewrite_uniprot_answer")
         state_graph.add_edge("rewrite_reactome_answer", "generate_final_response")
         state_graph.add_edge("rewrite_uniprot_answer", "generate_final_response")
+        state_graph.add_edge("perform_web_search", "generate_final_response")
         state_graph.add_edge("generate_final_response", "postprocess")
         state_graph.set_finish_point("postprocess")
 
@@ -116,26 +136,58 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
     async def generate_reactome_answer(
         self, state: CrossDatabaseState, config: RunnableConfig
     ) -> CrossDatabaseState:
-        reactome_answer: dict[str, Any] = await self.reactome_rag.ainvoke(
+        reactome_result: dict[str, Any] = await self.reactome_rag.ainvoke(
             {
                 "input": state["rephrased_input"],
                 "chat_history": state["chat_history"],
             },
             config,
         )
-        return CrossDatabaseState(reactome_answer=reactome_answer["answer"])
+        return CrossDatabaseState(
+            reactome_answer=reactome_result["answer"],
+            reactome_context=reactome_result.get("context", []),
+        )
+
+    async def check_reactome_hallucination(
+        self, state: CrossDatabaseState, config: RunnableConfig
+    ) -> CrossDatabaseState:
+        """Grade whether the Reactome answer is grounded in its retrieved documents."""
+        grade: HallucinationGrade = await self.hallucination_grader.ainvoke(
+            {
+                "documents": format_documents(state.get("reactome_context", [])),
+                "generation": state["reactome_answer"],
+            },
+            config,
+        )
+        return CrossDatabaseState(reactome_hallucination=grade.binary_score)
 
     async def generate_uniprot_answer(
         self, state: CrossDatabaseState, config: RunnableConfig
     ) -> CrossDatabaseState:
-        uniprot_answer: dict[str, Any] = await self.uniprot_rag.ainvoke(
+        uniprot_result: dict[str, Any] = await self.uniprot_rag.ainvoke(
             {
                 "input": state["rephrased_input"],
                 "chat_history": state["chat_history"],
             },
             config,
         )
-        return CrossDatabaseState(uniprot_answer=uniprot_answer["answer"])
+        return CrossDatabaseState(
+            uniprot_answer=uniprot_result["answer"],
+            uniprot_context=uniprot_result.get("context", []),
+        )
+
+    async def check_uniprot_hallucination(
+        self, state: CrossDatabaseState, config: RunnableConfig
+    ) -> CrossDatabaseState:
+        """Grade whether the UniProt answer is grounded in its retrieved documents."""
+        grade: HallucinationGrade = await self.hallucination_grader.ainvoke(
+            {
+                "documents": format_documents(state.get("uniprot_context", [])),
+                "generation": state["uniprot_answer"],
+            },
+            config,
+        )
+        return CrossDatabaseState(uniprot_hallucination=grade.binary_score)
 
     async def rewrite_reactome_query(
         self, state: CrossDatabaseState, config: RunnableConfig
