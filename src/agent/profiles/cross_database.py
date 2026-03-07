@@ -275,12 +275,16 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
     async def generate_final_response(
         self, state: CrossDatabaseState, config: RunnableConfig
     ) -> CrossDatabaseState:
+        web_results_text = TavilyWrapper.format_results(
+            state.get("web_search_results", [])
+        )
         final_response: str = await self.summarize_final_answer.ainvoke(
             {
                 "input": state["rephrased_input"],
                 "detected_language": state["detected_language"],
                 "reactome_answer": state["reactome_answer"],
                 "uniprot_answer": state["uniprot_answer"],
+                "web_results": web_results_text,
             },
             config,
         )

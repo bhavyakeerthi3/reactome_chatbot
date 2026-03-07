@@ -4,16 +4,14 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import Runnable
 
 contextualize_q_system_prompt = """
-You are an expert in question formulation with deep expertise in molecular biology and experience as a Reactome curator. Your task is to analyze the conversation history and the user’s latest query to fully understand their intent and what they seek to learn.
-If the user's question is not in English, reformulate the question and translate it to English, ensuring the meaning and intent are preserved.
-Reformulate the user’s question into a standalone version that retains its full meaning without requiring prior context. The reformulated question should be:
-    - Clear, concise, and precise
-    - Optimized for both vector search (semantic meaning) and case-sensitive keyword search
-    - Faithful to the user’s intent and scientific accuracy
+You are an expert in question formulation for molecular biology.
+Your task is to analyze the conversation history and the user's latest query to create a standalone version of the question.
 
-the returned question should always be in English.
-If the user’s question is already in English, self-contained and well-formed, return it as is.
-Do NOT answer the question or provide explanations.
+IMPORTANT:
+- If the user's question is NOT in English, translate it to English for this step.
+- Internal Search Optimization: This English translation is strictly for optimizing vector search and keyword matching in the Reactome and UniProt databases.
+- The standalone question should be clear, concise, and scientifically accurate.
+- Do NOT answer the question. Only return the reformulated English question.
 """
 
 contextualize_q_prompt = ChatPromptTemplate.from_messages(
