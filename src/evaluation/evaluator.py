@@ -34,6 +34,24 @@ def parse_arguments():
         help="Path to the directory containing testset Excel (.xlsx) files",
     )
     parser.add_argument(
+        "--embeddings_dir",
+        type=str,
+        default=None,
+        help=(
+            "Path to the vectorstore embeddings directory. "
+            "Defaults to the REACTOME_EMBEDDINGS_DIR environment variable."
+        ),
+    )
+    parser.add_argument(
+        "--summations_csv",
+        type=str,
+        default=None,
+        help=(
+            "Path to the summations CSV file for BM25 retriever. "
+            "Defaults to the REACTOME_SUMMATIONS_CSV environment variable."
+        ),
+    )
+    parser.add_argument(
         "--model",
         type=str,
         default="gpt-4o-mini",
@@ -61,14 +79,49 @@ def load_dataset(testset_path):
         raise ValueError(f"Error reading the Excel file: {e}")
 
 
-def initialize_rag_chain_with_memory(embeddings_directory, model_name, rag_type):
-    """Initialize the RAGChainWithMemory system."""
+def resolve_path(arg_value: str | None, env_var: str, description: str) -> str:
+    """
+    Resolves a required path from a CLI argument or environment variable.
+    
+    Args:
+        arg_value: The value from a CLI argument (may be None).
+        env_var: The environment variable name to fall back to.
+        description: A human-readable description for error messages.
+    
+    Returns:
+        The resolved absolute path string.
+    
+    Raises:
+        ValueError: If neither the CLI argument nor the environment variable is set.
+    """
+    resolved = arg_value or os.getenv(env_var)
+    if not resolved:
+        raise ValueError(
+            f"Missing required path for {description}. "
+            f"Provide it via --{env_var.lower().replace('_', '-')} or "
+            f"set the {env_var} environment variable."
+        )
+    return resolved
+
+
+def initialize_rag_chain(embeddings_directory: str, summations_csv: str, model_name: str, rag_type: str):
+    """
+    Initialize the RAG chain using the provided paths.
+
+    Args:
+        embeddings_directory: Path to the Chroma vectorstore directory.
+        summations_csv: Path to the summations CSV file for BM25 retriever.
+        model_name: Name of the OpenAI chat model.
+        rag_type: Either 'basic' or 'advanced'.
+    
+    Returns:
+        A LangChain retrieval chain configured for evaluation.
+    """
     llm = ChatOpenAI(temperature=0.0, verbose=True, model=model_name)
     retriever_list = []
 
-    loader = CSVLoader(
-        "/Users/hmohammadi/Desktop/react_to_me_github/reactome_chatbot/embeddings/openai/text-embedding-3-large/reactome/summation_csv/summations.csv"
-    )
+    # Load documents for BM25
+    loader = CSVLoader(summations_csv)
     data = loader.load()
     bm25_retriever = BM25Retriever.from_documents(data)
     bm25_retriever.k = 7
@@ -176,10 +229,21 @@ def main():
     os.makedirs(response_dir, exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
 
+    # Resolve paths from CLI args or environment variables
+    embeddings_directory = resolve_path(
+        args.embeddings_dir,
+        "REACTOME_EMBEDDINGS_DIR",
+        "embeddings directory"
+    )
+    summations_csv = resolve_path(
+        args.summations_csv,
+        "REACTOME_SUMMATIONS_CSV",
+        "summations CSV"
+    )
+
     # Initialize RAG Chain
-    embeddings_directory = "/Users/hmohammadi/Desktop/react_to_me_github/reactome_chatbot/embeddings/openai/text-embedding-3-large/reactome/Release90/summations"
-    qa_system = initialize_rag_chain_with_memory(
-        embeddings_directory, model_name, rag_type
+    qa_system = initialize_rag_chain(
+        embeddings_directory, summations_csv, model_name, rag_type
     )
 
     # Iterate over all .xlsx files in the directory
