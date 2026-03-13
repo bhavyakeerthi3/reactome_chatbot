@@ -1,4 +1,17 @@
-from langchain.chains.query_constructor.base import AttributeInfo
+try:
+    from langchain.chains.query_constructor.base import AttributeInfo
+except ImportError:
+    try:
+        from langchain.chains.query_constructor.schema import AttributeInfo
+    except ImportError:
+        try:
+            from langchain_classic.chains.query_constructor.schema import AttributeInfo
+        except ImportError:
+            class AttributeInfo:
+                def __init__(self, name: str, description: str, type: str):
+                    self.name = name
+                    self.description = description
+                    self.type = type
 
 pathway_id_description = "A Reactome Identifier unique to each pathway. A pathway name may appear multiple times in the dataset\
                 This ID allows for the specific identification and exploration of each pathway's details within the Reactome Database."
