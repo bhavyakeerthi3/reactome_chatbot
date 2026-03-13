@@ -23,45 +23,29 @@ class ReactomeTopologyTool:
         except Exception:
             return None
 
-    def get_reaction_participants(self, st_id: str) -> dict[str, Any]:
-        """Fetch inputs, outputs, and catalysts for a given reaction."""
-        url = f"{self.BASE_URL}/participants/{st_id}"
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                return {
-                    "inputs": [p.get("displayName") for p in data.get("inputs", [])],
-                    "outputs": [p.get("displayName") for p in data.get("outputs", [])],
-                    "catalysts": [c.get("displayName") for c in data.get("catalysts", [])],
-                }
-        except Exception:
-            pass
-        return {}
-
-    def get_preceding_events(self, st_id: str) -> list[str]:
-        """Fetch preceding events for a given reaction or event."""
-        url = f"{self.BASE_URL}/precedingEvents/{st_id}"
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                return [e.get("displayName") for e in data]
-        except Exception:
-            pass
-        return []
-
     def get_flow_context(self, st_id: str) -> str:
-        """Get a human-readable summary of the topological flow for an event."""
-        participants = self.get_reaction_participants(st_id)
-        preceding = self.get_preceding_events(st_id)
+        """Get a human-readable summary of the topological flow for an event using a single API call."""
+        data = self.query_id(st_id)
+        if not data:
+            return ""
+
+        context = f"Event: {data.get('displayName', st_id)} ({st_id})\n"
         
-        context = f"Event: {st_id}\n"
-        if participants.get("inputs"):
-            context += f"Inputs: {', '.join(participants['inputs'])}\n"
-        if participants.get("outputs"):
-            context += f"Outputs: {', '.join(participants['outputs'])}\n"
+        # Extract inputs/outputs/catalysts (for Reactions)
+        inputs = [i.get("displayName") for i in data.get("input", [])]
+        outputs = [o.get("displayName") for o in data.get("output", [])]
+        catalysts = [c.get("physicalEntity", {}).get("displayName") for c in data.get("catalystActivity", []) if c.get("physicalEntity")]
+        
+        # Extract preceding events
+        preceding = [e.get("displayName") for e in data.get("precedingEvent", [])]
+
+        if inputs:
+            context += f"Inputs: {', '.join(inputs)}\n"
+        if outputs:
+            context += f"Outputs: {', '.join(outputs)}\n"
+        if catalysts:
+            context += f"Catalysts: {', '.join(catalysts)}\n"
         if preceding:
             context += f"Preceding Events: {', '.join(preceding)}\n"
             
-        return context if context != f"Event: {st_id}\n" else ""
+        return context
