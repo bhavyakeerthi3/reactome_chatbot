@@ -13,70 +13,55 @@ class ReactomeTopologyTool:
     def __init__(self):
         self.session = requests.Session()
 
-    def query_id(self, st_id: str) -> Optional[dict[str, Any]]:
-        """Queries the Content Service for a specific Stable ID."""
+    def query_id(self, st_id: str) -> dict[str, Any] | None:
+        """Query the Content Service for a single ID."""
         url = f"{self.BASE_URL}/query/{st_id}"
         try:
-            response = self.session.get(url)
+            response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return response.json()
-        except Exception as e:
-            logging.error(f"Error querying Reactome ID {st_id}: {e}")
+        except Exception:
             return None
 
-    def get_reaction_participants(self, st_id: str) -> dict[str, list[str]]:
-        """
-        Fetches the inputs, outputs, and catalysts for a given reaction.
-        """
-        data = self.query_id(st_id)
-        if not data:
-            return {}
+    def get_reaction_participants(self, st_id: str) -> dict[str, Any]:
+        """Fetch inputs, outputs, and catalysts for a given reaction."""
+        url = f"{self.BASE_URL}/participants/{st_id}"
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "inputs": [p.get("displayName") for p in data.get("inputs", [])],
+                    "outputs": [p.get("displayName") for p in data.get("outputs", [])],
+                    "catalysts": [c.get("displayName") for c in data.get("catalysts", [])],
+                }
+        except Exception:
+            pass
+        return {}
 
-        participants = {
-            "inputs": [i.get("displayName") for i in data.get("input", [])],
-            "outputs": [o.get("displayName") for o in data.get("output", [])],
-            "catalysts": [
-                c.get("physicalEntity", {}).get("displayName")
-                for c in data.get("catalystActivity", [])
-            ],
-        }
-        return participants
-
-    def get_preceding_events(self, st_id: str) -> list[dict[str, str]]:
-        """
-        Fetches events that immediately precede the given event.
-        """
-        data = self.query_id(st_id)
-        if not data:
-            return []
-
-        preceding = [
-            {"stId": e.get("stId"), "displayName": e.get("displayName")}
-            for e in data.get("precedingEvent", [])
-        ]
-        return preceding
+    def get_preceding_events(self, st_id: str) -> list[str]:
+        """Fetch preceding events for a given reaction or event."""
+        url = f"{self.BASE_URL}/precedingEvents/{st_id}"
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                return [e.get("displayName") for e in data]
+        except Exception:
+            pass
+        return []
 
     def get_flow_context(self, st_id: str) -> str:
-        """
-        Generates a human-readable summary of the topological flow for an event.
-        """
+        """Get a human-readable summary of the topological flow for an event."""
         participants = self.get_reaction_participants(st_id)
         preceding = self.get_preceding_events(st_id)
         
-        data = self.query_id(st_id)
-        name = data.get("displayName") if data else st_id
-
-        summary = f"Reaction: {name} ({st_id})\n"
+        context = f"Event: {st_id}\n"
         if participants.get("inputs"):
-            summary += f"- Inputs: {', '.join(participants['inputs'])}\n"
+            context += f"Inputs: {', '.join(participants['inputs'])}\n"
         if participants.get("outputs"):
-            summary += f"- Outputs: {', '.join(participants['outputs'])}\n"
-        if participants.get("catalysts"):
-            summary += f"- Catalysts: {', '.join(participants['catalysts'])}\n"
-        
+            context += f"Outputs: {', '.join(participants['outputs'])}\n"
         if preceding:
-            summary += "- Preceded by:\n"
-            for p in preceding:
-                summary += f"  * {p['displayName']} ({p['stId']})\n"
-        
-        return summary
+            context += f"Preceding Events: {', '.join(preceding)}\n"
+            
+        return context if context != f"Event: {st_id}\n" else ""

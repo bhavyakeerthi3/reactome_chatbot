@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -20,6 +20,7 @@ from retrievers.reactome.rag import create_reactome_rag
 from retrievers.uniprot.rag import create_uniprot_rag
 from tools.reactome_topology import ReactomeTopologyTool
 import re
+import requests
 
 
 class CrossDatabaseState(BaseState):
@@ -213,23 +214,22 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
             uniprot_completeness=uniprot_completeness.binary_score,
         )
 
-    async def decide_next_steps(self, state: CrossDatabaseState) -> Literal[
-        "generate_final_response",
-        "perform_web_search",
-        "rewrite_reactome_query",
-        "rewrite_uniprot_query",
-        "identify_flow",
-    ]:
-        # Check for mechanistic intent (e.g., "what happens after", "consequences", "downstream", "flow")
-        mechanistic_keywords = ["after", "consequence", "downstream", "flow", "mechanism", "sequence", "next", "trigger"]
-        user_query = state["rephrased_input"].lower()
-        has_mechanistic_intent = any(kw in user_query for kw in mechanistic_keywords)
+    async def decide_next_steps(self, state: CrossDatabaseState) -> Literal["identify_flow", "generate_final_response", "perform_web_search", "rewrite_reactome_query", "rewrite_uniprot_query"]:
+        """Decide the next step based on the research results and context."""
+        user_query = state.get("rephrased_input", "").lower()
+        reactome_answer = state.get("reactome_answer", "")
+        uniprot_answer = state.get("uniprot_answer", "")
+        
+        # Tightened keyword matching for mechanistic flow detection
+        flow_pattern = r"\b(after|consequence|downstream|flow|precede|trigger|following|upstream|mechanism)\b"
+        is_mechanistic = bool(re.search(flow_pattern, user_query))
+        
+        if is_mechanistic and reactome_answer and "error" not in reactome_answer.lower():
+            return "identify_flow"
 
         reactome_complete = state["reactome_completeness"] != "No"
         uniprot_complete = state["uniprot_completeness"] != "No"
 
-        if has_mechanistic_intent and state["reactome_answer"]:
-             return "identify_flow"
 
         if reactome_complete and uniprot_complete:
             return "generate_final_response"

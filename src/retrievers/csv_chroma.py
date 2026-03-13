@@ -3,20 +3,7 @@ from pathlib import Path
 from typing import Annotated, Any, Coroutine, TypedDict
 
 import chromadb.config
-try:
-    from langchain.chains.query_constructor.schema import AttributeInfo
-except ImportError:
-    try:
-        from langchain.chains.query_constructor.base import AttributeInfo
-    except ImportError:
-        try:
-            from langchain_classic.chains.query_constructor.schema import AttributeInfo
-        except ImportError:
-            class AttributeInfo:
-                def __init__(self, name: str, description: str, type: str):
-                    self.name = name
-                    self.description = description
-                    self.type = type
+from util.langchain_compat import AttributeInfo
 from langchain.retrievers import EnsembleRetriever, MultiQueryRetriever
 from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import EmbeddingsFilter
