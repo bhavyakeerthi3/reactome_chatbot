@@ -20,7 +20,6 @@ from retrievers.reactome.rag import create_reactome_rag
 from retrievers.uniprot.rag import create_uniprot_rag
 from tools.reactome_topology import ReactomeTopologyTool
 import re
-import requests
 
 
 class CrossDatabaseState(BaseState):
