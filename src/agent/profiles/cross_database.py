@@ -31,6 +31,8 @@ class CrossDatabaseState(BaseState):
     uniprot_answer: str  # LLM-generated answer from UniProt
     uniprot_completeness: str  # LLM-assessed completeness of the UniProt answer
 
+    flow_context: str  # Topological flow data fetched by identify_flow() for mechanistic queries
+
 
 class CrossDatabaseGraphBuilder(BaseGraphBuilder):
     def __init__(

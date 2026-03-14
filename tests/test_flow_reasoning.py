@@ -101,3 +101,21 @@ async def test_decide_next_steps_mechanistic(builder):
     }
     decision = await builder.decide_next_steps(state)
     assert decision == "generate_final_response"
+
+
+def test_flow_context_in_state():
+    """
+    Regression test: flow_context must be declared in CrossDatabaseState.
+
+    Without this field, LangGraph silently drops the topology data returned
+    by identify_flow() before verify_mechanism() can read it — making the
+    entire topological reasoning feature a no-op.
+    """
+    from agent.profiles.cross_database import CrossDatabaseState
+    import typing
+
+    hints = typing.get_type_hints(CrossDatabaseState)
+    assert "flow_context" in hints, (
+        "CrossDatabaseState is missing the 'flow_context' field. "
+        "LangGraph will silently drop topology data between nodes without it."
+    )
