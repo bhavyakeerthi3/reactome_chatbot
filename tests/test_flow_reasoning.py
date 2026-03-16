@@ -11,6 +11,14 @@ if 'langchain.retrievers' not in sys.modules:
     sys.modules['langchain.retrievers.self_query'] = mock_retrievers
     sys.modules['langchain.retrievers.self_query.base'] = mock_retrievers
 
+# langchain.chains moved to langchain_core or langchain-community — mock it for the test environment
+if 'langchain.chains' not in sys.modules:
+    mock_chains = MagicMock()
+    sys.modules['langchain.chains'] = mock_chains
+    sys.modules['langchain.chains.base'] = mock_chains
+    sys.modules['langchain.chains.combine_documents'] = mock_chains
+    sys.modules['langchain.chains.retrieval'] = mock_chains
+
 if 'chromadb' not in sys.modules:
     sys.modules['chromadb'] = MagicMock()
     sys.modules['chromadb.config'] = MagicMock()
@@ -30,8 +38,12 @@ from agent.profiles.cross_database import CrossDatabaseGraphBuilder
 from agent.profiles.base import BaseState
 
 @pytest.fixture
+def anyio_backend():
+    return 'asyncio'
+
+@pytest.fixture
 def mock_llm():
-    return AsyncMock()
+    return MagicMock()
 
 @pytest.fixture
 def mock_embedding():
@@ -39,16 +51,21 @@ def mock_embedding():
 
 @pytest.fixture
 def builder(mock_llm, mock_embedding):
+    # Patch all chain/tool creation to avoid heavy initialization and TypeErrors
     with patch('agent.profiles.cross_database.create_reactome_rag'), \
          patch('agent.profiles.cross_database.create_uniprot_rag'), \
          patch('agent.profiles.cross_database.create_completeness_grader'), \
          patch('agent.profiles.cross_database.create_reactome_rewriter_w_uniprot'), \
          patch('agent.profiles.cross_database.create_uniprot_rewriter_w_reactome'), \
          patch('agent.profiles.cross_database.create_reactome_uniprot_summarizer'), \
-         patch('agent.profiles.cross_database.create_flow_reasoner'):
+         patch('agent.profiles.cross_database.create_flow_reasoner'), \
+         patch('agent.profiles.base.create_rephrase_chain'), \
+         patch('agent.profiles.base.create_safety_checker'), \
+         patch('agent.profiles.base.create_language_detector'), \
+         patch('agent.profiles.base.create_search_workflow'):
         return CrossDatabaseGraphBuilder(mock_llm, mock_embedding)
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_identify_flow(builder):
     state = {
         "reactome_answer": "The reaction R-HSA-123456 and R-HSA-789012 are involved."
@@ -64,7 +81,7 @@ async def test_identify_flow(builder):
     assert "Context for R-HSA-789012" in result["flow_context"]
     assert mock_topology.get_flow_context.call_count == 2
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_verify_mechanism(builder):
     state = {
         "rephrased_input": "How does it work?",
@@ -80,7 +97,7 @@ async def test_verify_mechanism(builder):
     assert result["reactome_answer"] == "Verified answer."
     builder.flow_reasoner.ainvoke.assert_called_once()
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_decide_next_steps_mechanistic(builder):
     # Case 1: Mechanistic intent
     state = {
