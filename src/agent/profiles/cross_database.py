@@ -27,6 +27,7 @@ class CrossDatabaseState(BaseState):
     uniprot_query: str  # LLM-generated query for UniProt
     uniprot_answer: str  # LLM-generated answer from UniProt
     uniprot_completeness: str  # LLM-assessed completeness of the UniProt answer
+    web_search_results: str  # Results from external web search fallback
 
 
 class CrossDatabaseGraphBuilder(BaseGraphBuilder):
@@ -62,6 +63,7 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
         state_graph.add_node("rewrite_uniprot_answer", self.rewrite_uniprot_answer)
         state_graph.add_node("assess_completeness", self.assess_completeness)
         state_graph.add_node("decide_next_steps", self.decide_next_steps)
+        state_graph.add_node("perform_web_search", self.perform_web_search)
         state_graph.add_node("generate_final_response", self.generate_final_response)
         state_graph.add_node("postprocess", self.postprocess)
         # Set up edges
@@ -81,11 +83,12 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
             self.decide_next_steps,
             {
                 "generate_final_response": "generate_final_response",
-                "perform_web_search": "generate_final_response",
+                "perform_web_search": "perform_web_search",
                 "rewrite_reactome_query": "rewrite_reactome_query",
                 "rewrite_uniprot_query": "rewrite_uniprot_query",
             },
         )
+        state_graph.add_edge("perform_web_search", "generate_final_response")
         state_graph.add_edge("rewrite_reactome_query", "rewrite_reactome_answer")
         state_graph.add_edge("rewrite_uniprot_query", "rewrite_uniprot_answer")
         state_graph.add_edge("rewrite_reactome_answer", "generate_final_response")
@@ -220,6 +223,28 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
         else:
             return "perform_web_search"
 
+    async def perform_web_search(
+        self, state: CrossDatabaseState, config: RunnableConfig
+    ) -> CrossDatabaseState:
+        """Perform external web search if internal data is insufficient."""
+        from tools.external_search.state import SearchState
+        search_state: SearchState = await self.search_workflow.ainvoke(
+            SearchState(
+                input=state["rephrased_input"],
+                generation=f"Reactome: {state['reactome_answer']}\nUniProt: {state['uniprot_answer']}",
+            ),
+            config,
+        )
+
+        results = search_state.get("search_results", [])
+        search_text = "No results found."
+        if results:
+            search_text = "\n\n".join(
+                [f"Source: {r['url']}\nContent: {r['content']}" for r in results]
+            )
+
+        return CrossDatabaseState(web_search_results=search_text)
+
     async def generate_final_response(
         self, state: CrossDatabaseState, config: RunnableConfig
     ) -> CrossDatabaseState:
@@ -229,6 +254,7 @@ class CrossDatabaseGraphBuilder(BaseGraphBuilder):
                 "detected_language": state["detected_language"],
                 "reactome_answer": state["reactome_answer"],
                 "uniprot_answer": state["uniprot_answer"],
+                "web_search_results": state.get("web_search_results", "No external search was performed."),
             },
             config,
         )
